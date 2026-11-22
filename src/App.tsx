@@ -486,6 +486,12 @@ const registrationRepository = {
     const sbAnon = customSupabaseConfig?.anonKey || EVENT_CONFIG.supabaseAnonKey;
 
     // 1. Prefer secure Vercel Serverless API (/api/register) when deployed
+    const isHostedProduction =
+      typeof window !== 'undefined' &&
+      !window.location.hostname.includes('localhost') &&
+      !window.location.hostname.includes('127.0.0.1') &&
+      !window.location.hostname.includes('usercontent.goog');
+
     try {
       const apiResponse = await fetch('/api/register', {
         method: 'POST',
@@ -512,9 +518,16 @@ const registrationRepository = {
           ]);
           return result.registration;
         }
+      } else if (isHostedProduction) {
+        throw new Error(
+          `Server API /api/register returned status ${apiResponse.status}. Check Vercel Function logs.`
+        );
       }
     } catch (apiErr) {
-      // Surface explicit validation/duplicate errors from /api/register immediately
+      // On deployed Vercel site, always surface the real backend error instead of faking local save
+      if (isHostedProduction) {
+        throw new Error(apiErr?.message || 'Failed to save registration to database.');
+      }
       if (
         apiErr?.message &&
         (apiErr.message.includes('already registered') ||
@@ -524,7 +537,6 @@ const registrationRepository = {
       ) {
         throw apiErr;
       }
-      // Otherwise fall through to direct Supabase REST or local preview storage
     }
 
     // 2. Direct Supabase REST insert if URL + Anon Key are configured
