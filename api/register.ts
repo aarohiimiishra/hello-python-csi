@@ -1,11 +1,4 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseAdmin = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  { auth: { persistSession: false } }
-);
 
 const BENNETT_EMAIL_REGEX = /^[a-z0-9._%+-]+@bennett\.edu\.in$/i;
 const INDIAN_MOBILE_REGEX = /^[6-9]\d{9}$/;
@@ -13,6 +6,15 @@ const INDIAN_MOBILE_REGEX = /^[6-9]\d{9}$/;
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const supabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').replace(/\/$/, '');
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+
+  if (!supabaseUrl || !serviceKey) {
+    return res.status(500).json({
+      error: 'Server configuration error: Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in Vercel.'
+    });
   }
 
   const { fullName, collegeEmail, phone, countryCode = '+91' } = req.body || {};
@@ -36,26 +38,47 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const formattedPhone = `${countryCode}${cleanDigits}`;
 
-  const { data, error } = await supabaseAdmin
-    .from('registrations')
-    .insert([
-      {
+  try {
+    // Use Supabase PostgREST directly so both sb_secret_... and legacy JWT service_role keys work seamlessly
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      apikey: serviceKey,
+      Prefer: 'return=representation'
+    };
+
+    // Legacy JWT keys (eyJ...) also require Authorization: Bearer; sb_secret_ keys use apikey
+    if (serviceKey.startsWith('eyJ')) {
+      headers.Authorization = `Bearer ${serviceKey}`;
+    }
+
+    const sbRes = await fetch(`${supabaseUrl}/rest/v1/registrations`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
         full_name: cleanName,
         college_email: cleanEmail,
         phone: formattedPhone
-      }
-    ])
-    .select('id, full_name, college_email, phone, created_at')
-    .single();
+      })
+    });
 
-  if (error) {
-    if (error.code === '23505') {
-      return res.status(409).json({
-        error: 'This Bennett University email is already registered for Hello Python.'
+    const data = await sbRes.json().catch(() => null);
+
+    if (!sbRes.ok) {
+      if (sbRes.status === 409 || data?.code === '23505') {
+        return res.status(409).json({
+          error: 'This Bennett University email is already registered for Hello Python.'
+        });
+      }
+      return res.status(sbRes.status).json({
+        error: data?.message || data?.hint || 'Database error while saving registration.'
       });
     }
-    return res.status(500).json({ error: 'Database error while saving registration.' });
-  }
 
-  return res.status(201).json({ registration: data });
+    const registration = Array.isArray(data) ? data[0] : data;
+    return res.status(201).json({ registration });
+  } catch (err: any) {
+    return res.status(500).json({
+      error: err?.message || 'Unexpected server error while connecting to Supabase.'
+    });
+  }
 }
