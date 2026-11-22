@@ -39,17 +39,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const formattedPhone = `${countryCode}${cleanDigits}`;
 
   try {
-    // Use Supabase PostgREST directly so both sb_secret_... and legacy JWT service_role keys work seamlessly
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       apikey: serviceKey,
-      Prefer: 'return=representation'
+      Authorization: `Bearer ${serviceKey}`
     };
-
-    // Legacy JWT keys (eyJ...) also require Authorization: Bearer; sb_secret_ keys use apikey
-    if (serviceKey.startsWith('eyJ')) {
-      headers.Authorization = `Bearer ${serviceKey}`;
-    }
 
     const sbRes = await fetch(`${supabaseUrl}/rest/v1/registrations`, {
       method: 'POST',
@@ -74,8 +68,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    const registration = Array.isArray(data) ? data[0] : data;
-    return res.status(201).json({ registration });
+    return res.status(201).json({
+      registration: {
+        full_name: cleanName,
+        college_email: cleanEmail,
+        phone: formattedPhone
+      }
+    });
   } catch (err: any) {
     return res.status(500).json({
       error: err?.message || 'Unexpected server error while connecting to Supabase.'
